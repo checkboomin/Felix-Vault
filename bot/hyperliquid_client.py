@@ -90,7 +90,7 @@ class HyperliquidClient:
         """Current mark price for `coin` on its dex."""
         dex = dex or self._coin_to_dex.get(coin, "")
         universe, ctxs = self.meta_and_asset_ctxs(dex)
-        names = [u["name"] for u in universe]
+        names = [u if isinstance(u, str) else u["name"] for u in universe]
         if coin not in names:
             raise KeyError(f"coin {coin!r} not found on dex {dex!r}")
         idx = names.index(coin)

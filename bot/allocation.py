@@ -150,13 +150,15 @@ async def get_reliable_markets(client, dexes: Optional[List[str]] = None) -> Lis
             continue
 
         for u, ctx in zip(universe, ctxs):
-            coin = u.get("name")
+            # HIP-3 dex universe items may be plain strings or dicts with "name".
+            coin = u if isinstance(u, str) else u.get("name")
             if not coin:
                 continue
             try:
-                funding_hourly = float(ctx.get("funding", 0.0))
-                oi = float(ctx.get("openInterest", 0.0))
-                mark = float(ctx.get("markPx") or ctx.get("oraclePx") or 0.0)
+                ctx_d = ctx if isinstance(ctx, dict) else {}
+                funding_hourly = float(ctx_d.get("funding", 0.0))
+                oi = float(ctx_d.get("openInterest", 0.0))
+                mark = float(ctx_d.get("markPx") or ctx_d.get("oraclePx") or 0.0)
             except (TypeError, ValueError):
                 continue
 
