@@ -15,6 +15,7 @@ Two responsibilities:
 
 from __future__ import annotations
 
+import logging
 import statistics
 import time
 from dataclasses import dataclass, field
@@ -24,6 +25,8 @@ try:
     from bot.config import CONFIG
 except ImportError:  # when bot/ is on sys.path directly
     from config import CONFIG
+
+LOG = logging.getLogger("felix.operator")
 
 HOURS_PER_YEAR = 24 * 365
 THIRTY_DAYS_MS = 30 * 24 * 3600 * 1000
@@ -132,68 +135,82 @@ def compute_capacity(oi_usd: float, long_pct: float) -> float:
     return min(cap, oi_usd)
 
 
-async def get_reliable_markets(client, dexes: Optional[List[str]] = None) -> List[Market]:
-    """Fetch all HIP-3 markets, score them, and return only the Reliable + viable ones,
-    sorted by funding APY descending.
+def _scan_universe(client, dex: str, out: List[Market], now_ms: int) -> None:
+    """Scan one dex (empty string = main HL markets) and append results to out."""
+    try:
+        universe, ctxs = client.meta_and_asset_ctxs(dex)
+    except Exception as exc:
+        LOG.debug("meta_and_asset_ctxs failed for dex=%r: %s", dex or "main", exc)
+        return
 
-    `client` is a HyperliquidClient. This is async to match the bot's call sites, but the
-    underlying client is synchronous (requests), which is fine for a single operator.
+    found = 0
+    for u, ctx in zip(universe, ctxs):
+        coin = u if isinstance(u, str) else u.get("name")
+        if not coin:
+            continue
+        try:
+            ctx_d = ctx if isinstance(ctx, dict) else {}
+            funding_hourly = float(ctx_d.get("funding", 0.0))
+            oi = float(ctx_d.get("openInterest", 0.0))
+            mark = float(ctx_d.get("markPx") or ctx_d.get("oraclePx") or 0.0)
+        except (TypeError, ValueError):
+            continue
+
+        oi_usd = oi * mark
+        apy = annualise(funding_hourly)
+        long_pct = estimate_long_pct(funding_hourly)
+
+        hist = client.funding_history(coin, now_ms - THIRTY_DAYS_MS)
+        cons = compute_consistency(hist)
+
+        label = dex or "main"
+        client.remember_dex(coin, dex)
+        out.append(
+            Market(
+                coin=coin,
+                dex=label,
+                oi_usd=oi_usd,
+                funding_hourly=funding_hourly,
+                funding_apy=apy,
+                mark_px=mark,
+                estimated_long_pct=long_pct,
+                capacity=compute_capacity(oi_usd, long_pct),
+                capacity_rating=cons["rating"],
+                cv=cons["cv"],
+                pct_time_positive=cons["pct_time_positive"],
+                pct_time_above_9=cons["pct_time_above_9"],
+                mean_apy=cons["mean_apy"],
+            )
+        )
+        found += 1
+
+    LOG.info("  dex=%-8s  %d coins found", dex or "main", found)
+
+
+async def get_reliable_markets(client, dexes: Optional[List[str]] = None) -> List[Market]:
+    """Fetch all HIP-3 markets, score them, and return only the viable ones.
+
+    Falls back to main HL perp markets if all HIP-3 dexes return empty
+    (common on testnet where HIP-3 RWA dexes are not populated).
     """
     dexes = dexes or CONFIG.HIP3_DEXES
     out: List[Market] = []
     now_ms = int(time.time() * 1000)
 
     for dex in dexes:
-        try:
-            universe, ctxs = client.meta_and_asset_ctxs(dex)
-        except Exception:
-            continue
+        _scan_universe(client, dex, out, now_ms)
 
-        for u, ctx in zip(universe, ctxs):
-            # HIP-3 dex universe items may be plain strings or dicts with "name".
-            coin = u if isinstance(u, str) else u.get("name")
-            if not coin:
-                continue
-            try:
-                ctx_d = ctx if isinstance(ctx, dict) else {}
-                funding_hourly = float(ctx_d.get("funding", 0.0))
-                oi = float(ctx_d.get("openInterest", 0.0))
-                mark = float(ctx_d.get("markPx") or ctx_d.get("oraclePx") or 0.0)
-            except (TypeError, ValueError):
-                continue
+    if not out:
+        LOG.info("No HIP-3 markets found — falling back to main HL perp universe")
+        _scan_universe(client, "", out, now_ms)
 
-            oi_usd = oi * mark
-            apy = annualise(funding_hourly)
-            long_pct = estimate_long_pct(funding_hourly)
+    LOG.info("Total coins scanned: %d", len(out))
 
-            # Reliability from 30d funding history (best-effort; degrade gracefully).
-            hist = client.funding_history(coin, now_ms - THIRTY_DAYS_MS)
-            cons = compute_consistency(hist)
-
-            client.remember_dex(coin, dex)
-            out.append(
-                Market(
-                    coin=coin,
-                    dex=dex,
-                    oi_usd=oi_usd,
-                    funding_hourly=funding_hourly,
-                    funding_apy=apy,
-                    mark_px=mark,
-                    estimated_long_pct=long_pct,
-                    capacity=compute_capacity(oi_usd, long_pct),
-                    capacity_rating=cons["rating"],
-                    cv=cons["cv"],
-                    pct_time_positive=cons["pct_time_positive"],
-                    pct_time_above_9=cons["pct_time_above_9"],
-                    mean_apy=cons["mean_apy"],
-                )
-            )
-
-    # Filter: viable APY + rating in the configured filter set.
+    # Filter: rating in allowed set AND APY >= threshold (>= so 0.0 passes when threshold=0).
     reliable = [
         m
         for m in out
-        if m.funding_apy > CONFIG.MIN_VIABLE_APY and m.capacity_rating in CONFIG.CAPACITY_RATING_FILTER
+        if m.funding_apy >= CONFIG.MIN_VIABLE_APY and m.capacity_rating in CONFIG.CAPACITY_RATING_FILTER
     ]
     reliable.sort(key=lambda m: m.funding_apy, reverse=True)
     return reliable
