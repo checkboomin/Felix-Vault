@@ -470,31 +470,58 @@ class OperatorBot:
     # --- event listener --------------------------------------------------------------
 
     async def listen_for_vault_events(self) -> None:
-        """Poll vault logs and dispatch to open/close handlers."""
+        """Poll vault logs via get_logs (HyperEVM doesn't support eth_newFilter)."""
         if self.vault is None:
             LOG.warning("event listener disabled (off-chain mode)")
             return
 
-        from_block = self.w3.eth.block_number
-        deploy_f = self.vault.events.DeployCapital.create_filter(from_block=from_block)
-        unwind_f = self.vault.events.UnwindCapital.create_filter(from_block=from_block)
-        added_f = self.vault.events.MarketAdded.create_filter(from_block=from_block)
-        removed_f = self.vault.events.MarketRemoved.create_filter(from_block=from_block)
+        from_block: int = self.w3.eth.block_number
+        LOG.info("Listening for vault events from block %s (get_logs polling)", from_block)
 
-        LOG.info("Listening for vault events from block %s", from_block)
+        deploy_topic = self.vault.events.DeployCapital._get_event_abi()
+        unwind_topic = self.vault.events.UnwindCapital._get_event_abi()
+
         while True:
+            await asyncio.sleep(5)
             try:
-                for ev in deploy_f.get_new_entries():
-                    await self._on_deploy(ev)
-                for ev in unwind_f.get_new_entries():
-                    await self._on_unwind(ev)
-                for ev in added_f.get_new_entries():
-                    LOG.info("MarketAdded: %s (%s)", ev["args"]["coin"], ev["args"]["dex"])
-                for ev in removed_f.get_new_entries():
-                    LOG.info("MarketRemoved: %s (%s)", ev["args"]["coin"], ev["args"]["dex"])
+                to_block = self.w3.eth.block_number
+                if to_block < from_block:
+                    continue
+                raw_logs = self.w3.eth.get_logs({
+                    "address": self.vault.address,
+                    "fromBlock": from_block,
+                    "toBlock": to_block,
+                })
+                for raw in raw_logs:
+                    try:
+                        try:
+                            ev = self.vault.events.DeployCapital().process_log(raw)
+                            await self._on_deploy(ev)
+                            continue
+                        except Exception:
+                            pass
+                        try:
+                            ev = self.vault.events.UnwindCapital().process_log(raw)
+                            await self._on_unwind(ev)
+                            continue
+                        except Exception:
+                            pass
+                        try:
+                            ev = self.vault.events.MarketAdded().process_log(raw)
+                            LOG.info("MarketAdded: %s (%s)", ev["args"]["coin"], ev["args"]["dex"])
+                            continue
+                        except Exception:
+                            pass
+                        try:
+                            ev = self.vault.events.MarketRemoved().process_log(raw)
+                            LOG.info("MarketRemoved: %s (%s)", ev["args"]["coin"], ev["args"]["dex"])
+                        except Exception:
+                            pass
+                    except Exception as exc:  # noqa: BLE001
+                        LOG.debug("log decode error: %s", exc)
+                from_block = to_block + 1
             except Exception as exc:  # noqa: BLE001
                 LOG.error("event poll error: %s", exc)
-            await asyncio.sleep(5)
 
     def _market_by_id_bytes(self, market_id_bytes: bytes) -> Optional[Market]:
         for m in self.markets.values():
