@@ -42,7 +42,6 @@ class Config:
 
     # --- Strategy parameters ---------------------------------------------------------
     MIN_VIABLE_APY: float = float(_get("MIN_VIABLE_APY", "9.0"))
-    CAPACITY_RATING_FILTER: List[str] = field(default_factory=lambda: ["Reliable"])
     MAX_POSITION_SIZE_PCT: float = float(_get("MAX_POSITION_SIZE_PCT", "0.45"))
     # Cap any single market at this fraction of total vault TVL.
     MAX_TVL_PCT_PER_MARKET: float = float(_get("MAX_TVL_PCT_PER_MARKET", "0.30"))
@@ -53,6 +52,10 @@ class Config:
     MAX_CV: float = float(_get("MAX_CV", "0.75"))
     MIN_PCT_TIME_POSITIVE: float = float(_get("MIN_PCT_TIME_POSITIVE", "80.0"))
     MIN_PCT_TIME_ABOVE_9: float = float(_get("MIN_PCT_TIME_ABOVE_9", "60.0"))
+    # Comma-separated list of accepted ratings, e.g. "Reliable,Moderate,Unreliable"
+    CAPACITY_RATING_FILTER: List[str] = field(
+        default_factory=lambda: _get("CAPACITY_RATING_FILTER", "Reliable").split(",")
+    )
 
     # --- Schedules (seconds) ---------------------------------------------------------
     FEE_ACCRUAL_INTERVAL: int = int(_get("FEE_ACCRUAL_INTERVAL", "3600"))
