@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Felix Vault — Carry Trade Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+<!-- ethers v6 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.2/ethers.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0b0c0f; --panel:#121419; --panel-hover:#171a21; --border:#23262f;
+    --border-soft:#1c1f27; --green:#1fcb75; --green-dim:rgba(31,203,117,.14);
+    --red:#ef4444; --red-dim:rgba(239,68,68,.14); --amber:#f5b942;
+    --amber-dim:rgba(245,185,66,.14); --blue:#3b82f6; --text:#fff;
+    --muted:#8b909c; --muted-2:#5e636e;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif;font-size:13px;line-height:1.45}
+  .mono{font-family:'JetBrains Mono',monospace}
+  h1,h2,h3{font-weight:600;margin:0}
+  a{color:var(--blue);text-decoration:none}
+  header{display:flex;align-items:center;justify-content:space-between;padding:14px 22px;border-bottom:1px solid var(--border);background:linear-gradient(180deg,#0e1014,#0b0c0f)}
+  header .brand{display:flex;align-items:center;gap:10px}
+  header .dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green)}
+  header .sub{color:var(--muted);font-size:11px}
+  .wrap{max-width:1320px;margin:0 auto;padding:18px 22px 60px}
+  .section{margin-top:26px}
+  .section>.head{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  .section>.head h2{font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+  .badge{font-size:10px;padding:2px 7px;border-radius:4px;border:1px solid var(--border);color:var(--muted)}
+  .badge.sim{color:var(--amber);border-color:rgba(245,185,66,.4);background:var(--amber-dim)}
+  .badge.real{color:var(--green);border-color:rgba(31,203,117,.4);background:var(--green-dim)}
+  /* cards */
+  .cards{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px}
+  .card .label{color:var(--muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.05em}
+  .card .val{font-size:20px;margin-top:6px;font-weight:600}
+  .card.glow .val{color:var(--green);text-shadow:0 0 16px rgba(31,203,117,.35)}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 9px;border-radius:20px}
+  .pill.ok{background:var(--green-dim);color:var(--green)}
+  .pill.warn{background:var(--red-dim);color:var(--red)}
+  /* panels */
+  .grid2{display:grid;grid-template-columns:1.1fr 1.5fr;gap:16px}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px}
+  .panel h3{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:12px}
+  .row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border-soft)}
+  .row:last-child{border-bottom:none}
+  .row .k{color:var(--muted)}
+  input{width:100%;background:#0c0d11;border:1px solid var(--border);color:var(--text);border-radius:7px;padding:10px 12px;font-family:'JetBrains Mono',monospace;font-size:14px;margin-top:6px}
+  button{cursor:pointer;border:none;border-radius:7px;padding:10px 14px;font-weight:600;font-size:13px}
+  .btn{background:var(--green);color:#04140c;width:100%;margin-top:10px}
+  .btn.alt{background:#1a1d24;color:var(--text);border:1px solid var(--border)}
+  .btn.wallet{background:var(--blue);color:#fff;width:auto;padding:7px 14px;font-size:12px}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .hint{color:var(--muted-2);font-size:11px;margin-top:8px}
+  /* table */
+  table{width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace;font-size:12px}
+  th,td{text-align:right;padding:8px 10px;border-bottom:1px solid var(--border-soft);white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--muted);font-weight:500;font-size:10.5px;text-transform:uppercase;letter-spacing:.03em;position:sticky;top:0;background:var(--panel)}
+  tr:hover td{background:var(--panel-hover)}
+  tfoot td{border-top:1px solid var(--border);font-weight:700;background:#0e1014}
+  .pos{color:var(--green)} .neg{color:var(--red)} .mut{color:var(--muted)}
+  .note{color:var(--muted-2);font-size:11px;margin-top:10px;font-style:italic}
+  /* log */
+  .log{background:#08090c;border:1px solid var(--border);border-radius:8px;padding:12px;height:240px;overflow:auto;font-family:'JetBrains Mono',monospace;font-size:11.5px;line-height:1.6}
+  .log .line{color:#c3c8d2;white-space:pre-wrap}
+  .log .warn{color:var(--amber)}
+  .log .err{color:var(--red)}
+  .chart-wrap{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px}
+  .legend{display:flex;gap:18px;font-size:11px;color:var(--muted);margin-top:8px}
+  .legend i{display:inline-block;width:10px;height:3px;margin-right:6px;vertical-align:middle}
+  .err-banner{background:var(--amber-dim);border:1px solid rgba(245,185,66,.4);color:var(--amber);padding:8px 12px;border-radius:7px;font-size:12px;margin-bottom:12px;display:none}
+  @media (max-width:1000px){.cards{grid-template-columns:repeat(3,1fr)}.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="dot"></span>
+    <div>
+      <h1 style="font-size:15px">Felix Vault <span class="sub">— delta-neutral carry trade console</span></h1>
+      <div class="sub">HyperEVM testnet · chain 998 · <span class="badge sim">SPOT: SIMULATED</span> <span class="badge real">PERP: REAL (HL testnet)</span></div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:12px">
+    <span id="walletAddr" class="sub mono">not connected</span>
+    <button class="btn wallet" id="connectBtn">Connect Wallet</button>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="err-banner" id="errBanner"></div>
+
+  <!-- ============ SECTION 1: OVERVIEW ============ -->
+  <div class="section">
+    <div class="head"><h2>Vault Overview</h2><span class="badge" id="updTs">—</span></div>
+    <div class="cards">
+      <div class="card"><div class="label">Total TVL</div><div class="val mono" id="cTvl">—</div></div>
+      <div class="card"><div class="label">Share Price</div><div class="val mono" id="cShare">—</div></div>
+      <div class="card glow"><div class="label">Blended APY</div><div class="val mono" id="cApy">—</div></div>
+      <div class="card"><div class="label">Pending Fees</div><div class="val mono" id="cFees">—</div></div>
+      <div class="card"><div class="label">Active Markets</div><div class="val mono" id="cMarkets">—</div></div>
+      <div class="card"><div class="label">Hedge Status</div><div class="val" id="cHedge"><span class="pill ok">—</span></div></div>
+    </div>
+  </div>
+
+  <!-- ============ SECTION 2 + 5(log) ============ -->
+  <div class="section grid2">
+    <!-- Deposit / Withdraw -->
+    <div class="panel">
+      <h3>Deposit / Withdraw</h3>
+      <div class="row"><span class="k">Your shares</span><span class="mono" id="uShares">—</span></div>
+      <div class="row"><span class="k">Your USDC value</span><span class="mono" id="uValue">—</span></div>
+      <div class="row"><span class="k">Your yield earned</span><span class="mono pos" id="uYield">—</span></div>
+
+      <div style="margin-top:14px">
+        <label class="k">Deposit USDC</label>
+        <input id="depAmt" class="mono" placeholder="10000" inputmode="decimal" />
+        <button class="btn" id="depBtn" disabled>Deposit</button>
+      </div>
+      <div style="margin-top:14px">
+        <label class="k">Withdraw shares</label>
+        <input id="wdAmt" class="mono" placeholder="5000" inputmode="decimal" />
+        <div class="hint" id="wdEst">Estimated back: — · fee: —</div>
+        <button class="btn alt" id="wdBtn" disabled>Withdraw</button>
+      </div>
+      <div class="hint">Share price refreshes every 30s. Connect a testnet wallet holding USDC to transact.</div>
+    </div>
+
+    <!-- Operator log -->
+    <div class="panel">
+      <h3>Operator Log <span class="badge" id="logSrc">waiting for bot/state.json</span></h3>
+      <div class="log" id="log"><div class="line mut">Operator log appears here once the bot publishes bot/state.json.
+Serve the repo root (e.g. `python -m http.server`) so the dashboard can read it.</div></div>
+    </div>
+  </div>
+
+  <!-- ============ SECTION 3: POSITIONS ============ -->
+  <div class="section">
+    <div class="head"><h2>Active Positions</h2></div>
+    <div class="panel" style="overflow:auto">
+      <table id="posTable">
+        <thead><tr>
+          <th>Market</th><th>Allocated</th><th>Sim Spot Size</th><th>Sim Spot PnL</th>
+          <th>Real Perp Size</th><th>Real Perp PnL</th><th>Funding</th><th>Net PnL</th>
+          <th>APY</th><th>% Vault</th>
+        </tr></thead>
+        <tbody id="posBody"><tr><td colspan="10" class="mut">No positions yet.</td></tr></tbody>
+        <tfoot id="posFoot"></tfoot>
+      </table>
+      <div class="note">Spot positions are simulated using HL mark price. Perp positions are real on HL testnet.
+        Net PnL ≈ funding earned confirms the delta-neutral hedge. Updates every 60s.</div>
+    </div>
+  </div>
+
+  <!-- ============ SECTION 4: YIELD HISTORY ============ -->
+  <div class="section">
+    <div class="head"><h2>Yield History</h2></div>
+    <div class="chart-wrap">
+      <svg id="chart" viewBox="0 0 1000 280" width="100%" height="280" preserveAspectRatio="none"></svg>
+      <div class="legend">
+        <span><i style="background:var(--green)"></i>Share price</span>
+        <span><i style="background:var(--blue)"></i>Cumulative funding</span>
+        <span><i style="background:var(--muted-2)"></i>Hedge drift (≈0)</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ------------------------------------------------------------------ config
+const CONFIG = {
+  // Set after deploy. The dashboard also tries to read deployment.json.
+  VAULT_ADDRESS: "",
+  RPC: "https://rpc.hyperliquid-testnet.xyz/evm",
+  CHAIN_ID: 998,
+  HL_API: "https://api.hyperliquid-testnet.xyz/info",
+  STATE_URL: "../bot/state.json",      // off-chain sim-spot data published by the bot
+  DEPLOYMENT_URL: "../deployment.json",// {address, abi}
+  HIP3_DEXES: ["xyz","vntl","hyna","km","cash","para"],
+  USDC_DECIMALS: 6,
+};
+
+// Minimal ABI for reads + deposit/withdraw.
+const VAULT_ABI = [
+  "function totalAssets() view returns (uint256)",
+  "function sharePrice() view returns (uint256)",
+  "function totalShares() view returns (uint256)",
+  "function pendingFees() view returns (uint256)",
+  "function accumulatedYield() view returns (uint256)",
+  "function activeMarketCount() view returns (uint256)",
+  "function shares(address) view returns (uint256)",
+  "function highWaterMark(address) view returns (uint256)",
+  "function userBalance(address) view returns (uint256 usdc, uint256 shares, uint256 yield)",
+  "function asset() view returns (address)",
+  "function deposit(uint256) returns (uint256)",
+  "function withdraw(uint256) returns (uint256)",
+  "event YieldReported(bytes32 indexed marketId, uint256 amount, uint256 timestamp)"
+];
+const ERC20_ABI = [
+  "function approve(address,uint256) returns (bool)",
+  "function allowance(address,address) view returns (uint256)",
+  "function balanceOf(address) view returns (uint256)",
+  "function decimals() view returns (uint8)"
+];
+
+// ------------------------------------------------------------------ helpers
+const $ = (id) => document.getElementById(id);
+const U = CONFIG.USDC_DECIMALS;
+const P = 18; // share-price scale
+let readProvider, browserProvider, signer, account, vaultRead, vaultWrite, assetAddr, usdcDecimals = 6;
+let lastState = null, sharePriceHistory = [];
+
+function fmtUsd(n){
+  if(n===null||n===undefined||isNaN(n)) return "—";
+  const a=Math.abs(n);
+  if(a>=1e9) return "$"+(n/1e9).toFixed(2)+"B";
+  if(a>=1e6) return "$"+(n/1e6).toFixed(2)+"M";
+  if(a>=1e3) return "$"+(n/1e3).toFixed(1)+"k";
+  return "$"+n.toFixed(2);
+}
+function signed(n,suffix=""){ const s=(n>=0?"+":"")+n.toFixed(2)+suffix; return `<span class="${n>=0?'pos':'neg'}">${s}</span>`; }
+function banner(msg){ const b=$("errBanner"); if(!msg){b.style.display="none";return;} b.style.display="block"; b.textContent=msg; }
+
+// ------------------------------------------------------------------ live HL blended APY
+async function hlPost(body){
+  const r = await fetch(CONFIG.HL_API, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  if(!r.ok) throw new Error("HL "+r.status);
+  return r.json();
+}
+// Map coin -> live funding APY across HIP-3 dexes.
+async function fetchLiveApyMap(){
+  const map={};
+  for(const dex of CONFIG.HIP3_DEXES){
+    try{
+      const [uni,ctx]=await hlPost({type:"metaAndAssetCtxs",dex});
+      uni.forEach((u,i)=>{ const f=parseFloat(ctx[i].funding||0); map[`${dex}:${u.name}`]=f*24*365*100; });
+    }catch(e){/* dex may be empty on testnet */}
+  }
+  return map;
+}
+
+// ------------------------------------------------------------------ on-chain init
+async function initChain(){
+  // Try deployment.json for address + ABI.
+  try{
+    const dep = await (await fetch(CONFIG.DEPLOYMENT_URL)).json();
+    if(dep.address){ CONFIG.VAULT_ADDRESS = dep.address; }
+    if(dep.rpc) CONFIG.RPC = dep.rpc;
+  }catch(e){/* optional */}
+
+  if(!CONFIG.VAULT_ADDRESS){ banner("VAULT_ADDRESS not set — deploy the vault and add it to deployment.json. Showing live HL funding only."); return; }
+  try{
+    readProvider = new ethers.JsonRpcProvider(CONFIG.RPC);
+    vaultRead = new ethers.Contract(CONFIG.VAULT_ADDRESS, VAULT_ABI, readProvider);
+    assetAddr = await vaultRead.asset();
+    try{ const usdc=new ethers.Contract(assetAddr,ERC20_ABI,readProvider); usdcDecimals=Number(await usdc.decimals()); }catch(e){}
+  }catch(e){ banner("RPC read failed: "+e.message); }
+}
+
+// ------------------------------------------------------------------ wallet
+$("connectBtn").onclick = async ()=>{
+  if(!window.ethereum){ banner("No injected wallet (MetaMask) found."); return; }
+  try{
+    browserProvider = new ethers.BrowserProvider(window.ethereum);
+    await browserProvider.send("eth_requestAccounts",[]);
+    signer = await browserProvider.getSigner();
+    account = await signer.getAddress();
+    $("walletAddr").textContent = account.slice(0,6)+"…"+account.slice(-4);
+    if(CONFIG.VAULT_ADDRESS){
+      vaultWrite = new ethers.Contract(CONFIG.VAULT_ADDRESS, VAULT_ABI, signer);
+      $("depBtn").disabled=false; $("wdBtn").disabled=false;
+    }
+    refreshUser();
+  }catch(e){ banner("Connect failed: "+e.message); }
+};
+
+// ------------------------------------------------------------------ deposit / withdraw
+$("depBtn").onclick = async ()=>{
+  if(!vaultWrite) return;
+  const amt = parseFloat($("depAmt").value||"0"); if(amt<=0) return;
+  const raw = ethers.parseUnits(amt.toString(), usdcDecimals);
+  try{
+    const usdc = new ethers.Contract(assetAddr, ERC20_ABI, signer);
+    const allow = await usdc.allowance(account, CONFIG.VAULT_ADDRESS);
+    if(allow < raw){ const tx=await usdc.approve(CONFIG.VAULT_ADDRESS, raw); await tx.wait(); }
+    const tx = await vaultWrite.deposit(raw); await tx.wait();
+    $("depAmt").value=""; refreshAll();
+  }catch(e){ banner("Deposit failed: "+(e.shortMessage||e.message)); }
+};
+$("wdBtn").onclick = async ()=>{
+  if(!vaultWrite) return;
+  const sh = parseFloat($("wdAmt").value||"0"); if(sh<=0) return;
+  const raw = ethers.parseUnits(sh.toString(), usdcDecimals); // shares share USDC scale
+  try{ const tx=await vaultWrite.withdraw(raw); await tx.wait(); $("wdAmt").value=""; refreshAll(); }
+  catch(e){ banner("Withdraw failed: "+(e.shortMessage||e.message)); }
+};
+$("wdAmt").addEventListener("input", estimateWithdraw);
+
+async function estimateWithdraw(){
+  if(!vaultRead || !lastState) return;
+  const sh = parseFloat($("wdAmt").value||"0"); if(sh<=0){ $("wdEst").textContent="Estimated back: — · fee: —"; return; }
+  try{
+    const [ta, ts] = await Promise.all([vaultRead.totalAssets(), vaultRead.totalShares()]);
+    if(ts===0n) return;
+    const shRaw = ethers.parseUnits(sh.toString(), usdcDecimals);
+    const owed = (shRaw * ta) / ts;
+    const hwm = account ? await vaultRead.highWaterMark(account) : 0n;
+    const cost = (shRaw * hwm) / (10n**18n);
+    let fee = 0n; if(owed>cost){ fee=((owed-cost)*800n)/10000n; }
+    const back = Number(ethers.formatUnits(owed-fee, usdcDecimals));
+    const feeN = Number(ethers.formatUnits(fee, usdcDecimals));
+    $("wdEst").textContent = `Estimated back: ${fmtUsd(back)} · fee (8%): ${fmtUsd(feeN)}`;
+  }catch(e){/* ignore */}
+}
+
+// ------------------------------------------------------------------ refreshers
+async function refreshChain(){
+  const apyMap = await fetchLiveApyMap().catch(()=>({}));
+  if(vaultRead){
+    try{
+      const [ta, sp, ts, fees, mkts] = await Promise.all([
+        vaultRead.totalAssets(), vaultRead.sharePrice(), vaultRead.totalShares(),
+        vaultRead.pendingFees(), vaultRead.activeMarketCount()
+      ]);
+      const tvl = Number(ethers.formatUnits(ta, usdcDecimals));
+      const share = Number(ethers.formatUnits(sp, P));
+      $("cTvl").textContent = fmtUsd(tvl);
+      $("cShare").textContent = "$"+share.toFixed(6);
+      $("cFees").textContent = fmtUsd(Number(ethers.formatUnits(fees, usdcDecimals)));
+      $("cMarkets").textContent = Number(mkts).toString();
+      pushHistory(share);
+    }catch(e){ banner("Chain read error: "+e.message); }
+  }
+  // Blended APY: capacity/alloc-weighted from state if present, else avg of live APYs.
+  let blended = null;
+  if(lastState && lastState.markets && lastState.markets.length){
+    let num=0,den=0; lastState.markets.forEach(m=>{ num+=m.allocated_usdc*(apyMap[m.id]??m.apy); den+=m.allocated_usdc; });
+    blended = den>0? num/den : null;
+  } else {
+    const vals=Object.values(apyMap).filter(v=>v>9 && v<2000); if(vals.length) blended=vals.reduce((a,b)=>a+b,0)/vals.length;
+  }
+  $("cApy").textContent = blended!==null ? blended.toFixed(1)+"%" : "—";
+  return apyMap;
+}
+
+function setHedge(status){
+  const el=$("cHedge");
+  if(status==="neutral") el.innerHTML='<span class="pill ok">Delta neutral ✓</span>';
+  else if(status==="drift") el.innerHTML='<span class="pill warn">Drift warning ✗</span>';
+  else el.innerHTML='<span class="pill ok">—</span>';
+}
+
+async function refreshState(){
+  try{
+    const r = await fetch(CONFIG.STATE_URL+"?t="+Date.now());
+    if(!r.ok) throw new Error(r.status);
+    lastState = await r.json();
+    $("logSrc").textContent = "live · "+new Date(lastState.updated_at*1000).toLocaleTimeString();
+    renderPositions(lastState);
+    renderLog(lastState.log_tail||[]);
+    setHedge(lastState.hedge_status);
+    if(lastState.share_price) pushHistory(lastState.share_price);
+  }catch(e){
+    $("logSrc").textContent = "bot/state.json not found";
+  }
+}
+
+function renderPositions(state){
+  const body=$("posBody"), foot=$("posFoot");
+  const ms = state.markets||[];
+  const tvl = ms.reduce((a,m)=>a+m.allocated_usdc,0) || 1;
+  if(!ms.length){ body.innerHTML='<tr><td colspan="10" class="mut">No positions yet.</td></tr>'; foot.innerHTML=""; return; }
+  body.innerHTML = ms.map(m=>`
+    <tr>
+      <td>${m.coin} <span class="mut">${m.dex}</span></td>
+      <td>${fmtUsd(m.allocated_usdc)}</td>
+      <td>${m.spot_size.toFixed(4)}</td>
+      <td>${signed(m.spot_pnl)}</td>
+      <td>${m.perp_size.toFixed(4)}</td>
+      <td>${signed(m.perp_pnl)}</td>
+      <td><span class="pos">+${m.funding.toFixed(2)}</span></td>
+      <td>${signed(m.net_pnl)}</td>
+      <td>${m.apy.toFixed(1)}%</td>
+      <td>${(100*m.allocated_usdc/tvl).toFixed(1)}%</td>
+    </tr>`).join("");
+  const sum=(f)=>ms.reduce((a,m)=>a+f(m),0);
+  foot.innerHTML = `<tr>
+    <td>TOTALS</td><td>${fmtUsd(sum(m=>m.allocated_usdc))}</td><td></td>
+    <td>${signed(sum(m=>m.spot_pnl))}</td><td></td><td>${signed(sum(m=>m.perp_pnl))}</td>
+    <td><span class="pos">+${sum(m=>m.funding).toFixed(2)}</span></td>
+    <td>${signed(sum(m=>m.net_pnl))}</td><td></td><td>100%</td></tr>`;
+}
+
+function renderLog(lines){
+  const el=$("log");
+  el.innerHTML = lines.map(l=>{
+    let cls="line"; if(/WARNING|drift/i.test(l)) cls="line warn"; if(/ERROR|FAIL/i.test(l)) cls="line err";
+    return `<div class="${cls}">${l.replace(/</g,"&lt;")}</div>`;
+  }).join("") || '<div class="line mut">no log yet</div>';
+  el.scrollTop = el.scrollHeight;
+}
+
+async function refreshUser(){
+  if(!vaultRead || !account) return;
+  try{
+    const [usdc, sh, yield_] = await vaultRead.userBalance(account);
+    $("uShares").textContent = Number(ethers.formatUnits(sh, usdcDecimals)).toFixed(2);
+    $("uValue").textContent = fmtUsd(Number(ethers.formatUnits(usdc, usdcDecimals)));
+    $("uYield").textContent = "+"+fmtUsd(Number(ethers.formatUnits(yield_, usdcDecimals)));
+  }catch(e){/* ignore */}
+}
+
+// ------------------------------------------------------------------ chart
+function pushHistory(share){
+  const t=Date.now();
+  const last=sharePriceHistory[sharePriceHistory.length-1];
+  if(!last || t-last.t>20000){ sharePriceHistory.push({t, share, funding:lastState? (lastState.total_funding||0):0, drift:lastState?(lastState.hedge_drift||0):0}); }
+  if(sharePriceHistory.length>240) sharePriceHistory.shift();
+  drawChart();
+}
+function drawChart(){
+  const svg=$("chart"); const W=1000,H=280,pad=34;
+  const data=sharePriceHistory; if(data.length<2){ svg.innerHTML=`<text x="${W/2}" y="${H/2}" fill="#5e636e" font-size="13" text-anchor="middle" font-family="JetBrains Mono">accumulating data…</text>`; return; }
+  const xs=(i)=>pad+(W-2*pad)*i/(data.length-1);
+  const series=(key,color,norm)=>{
+    const vals=data.map(d=>d[key]); const mn=Math.min(...vals),mx=Math.max(...vals); const span=(mx-mn)||1;
+    const ys=(v)=> H-pad-(H-2*pad)*((v-(norm?mn:Math.min(mn,0)))/(norm?span:(mx-Math.min(mn,0))||1));
+    const d=vals.map((v,i)=>`${i?'L':'M'}${xs(i).toFixed(1)},${ys(v).toFixed(1)}`).join(" ");
+    return `<path d="${d}" fill="none" stroke="${color}" stroke-width="2"/>`;
+  };
+  let g=`<line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="#23262f"/>`;
+  g+=series("share","#1fcb75",true);
+  g+=series("funding","#3b82f6",true);
+  g+=series("drift","#5e636e",false);
+  svg.innerHTML=g;
+}
+
+// ------------------------------------------------------------------ loops
+async function refreshAll(){ await refreshState(); await refreshChain(); await refreshUser(); await estimateWithdraw(); }
+(async ()=>{
+  await initChain();
+  await refreshAll();
+  setInterval(refreshChain, 30000);  // share price / chain every 30s
+  setInterval(refreshUser, 30000);
+  setInterval(refreshState, 10000);  // positions + log every 10s (positions table within 60s spec)
+})();
+</script>
+</body>
+</html>

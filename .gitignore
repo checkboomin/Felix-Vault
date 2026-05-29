@@ -1,0 +1,28 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Node / Hardhat
+node_modules/
+artifacts/
+cache/
+typechain-types/
+
+# Foundry
+out/
+broker/
+
+# Runtime artifacts
+bot/operator.log
+deployment.json
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

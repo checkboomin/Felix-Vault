@@ -1,0 +1,18 @@
+# Felix carry-trade prototype — Python dependencies
+
+# Hyperliquid testnet trading + signing
+hyperliquid-python-sdk>=0.9.0
+eth-account>=0.11.0
+
+# HyperEVM (Web3) interaction
+web3>=6.15.0
+
+# HTTP for /info endpoints
+requests>=2.31.0
+
+# Config
+python-dotenv>=1.0.0
+
+# On-the-fly Solidity compilation fallback for scripts/deploy.py
+# (only needed if you deploy without a Hardhat artifact)
+py-solc-x>=2.0.2
