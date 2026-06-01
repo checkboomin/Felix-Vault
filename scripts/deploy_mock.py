@@ -79,12 +79,21 @@ def _load_artifact(path: str, contract_name: str):
     return c["abi"], c["evm"]["bytecode"]["object"]
 
 
-def _send(w3, acct, tx):
-    tx.setdefault("from", acct.address)
-    tx.setdefault("nonce", w3.eth.get_transaction_count(acct.address))
-    tx.setdefault("gas", 4_000_000)
-    tx.setdefault("gasPrice", w3.eth.gas_price)
-    tx.setdefault("chainId", CONFIG.CHAIN_ID)
+def _build_and_send(w3, acct, func, gas: int):
+    """Build a legacy (gasPrice) tx from a ContractFunction/constructor and send it.
+
+    gasPrice must be passed INTO build_transaction so web3 builds a legacy tx;
+    setting it afterwards conflicts with the auto-added EIP-1559 fields.
+    """
+    tx = func.build_transaction(
+        {
+            "from": acct.address,
+            "nonce": w3.eth.get_transaction_count(acct.address),
+            "gas": gas,
+            "gasPrice": w3.eth.gas_price,
+            "chainId": CONFIG.CHAIN_ID,
+        }
+    )
     signed = acct.sign_transaction(tx)
     txh = w3.eth.send_raw_transaction(signed.raw_transaction)
     return w3.eth.wait_for_transaction_receipt(txh, timeout=180)
@@ -114,7 +123,7 @@ def main():
     print("Deploying MockUSDC ...")
     usdc_abi, usdc_bytecode = _load_artifact(USDC_ARTIFACT, "MockUSDC")
     USDC = w3.eth.contract(abi=usdc_abi, bytecode=usdc_bytecode)
-    rcpt = _send(w3, acct, USDC.constructor().build_transaction({"gas": 1_500_000}))
+    rcpt = _build_and_send(w3, acct, USDC.constructor(), 1_500_000)
     usdc_addr = rcpt.contractAddress
     print(f"   MockUSDC deployed at: {usdc_addr}")
 
@@ -123,7 +132,7 @@ def main():
     # 2) Mint demo USDC to the operator wallet --------------------------------------
     base_units = int(mint_amount * (10**USDC_DECIMALS))
     print(f"Minting {mint_amount:,.0f} USDC to {acct.address} ...")
-    _send(w3, acct, usdc.functions.mint(acct.address, base_units).build_transaction({"gas": 200_000}))
+    _build_and_send(w3, acct, usdc.functions.mint(acct.address, base_units), 200_000)
     bal = usdc.functions.balanceOf(acct.address).call()
     print(f"   Balance: {bal / 10**USDC_DECIMALS:,.2f} USDC")
 
@@ -134,14 +143,15 @@ def main():
     print(f"   operator:     {operator}")
     vault_abi, vault_bytecode = _load_artifact(VAULT_ARTIFACT, "FelixVault")
     Vault = w3.eth.contract(abi=vault_abi, bytecode=vault_bytecode)
-    rcpt = _send(
+    rcpt = _build_and_send(
         w3,
         acct,
         Vault.constructor(
             Web3.to_checksum_address(usdc_addr),
             Web3.to_checksum_address(fee_recipient),
             Web3.to_checksum_address(operator),
-        ).build_transaction({"gas": 4_000_000}),
+        ),
+        4_000_000,
     )
     vault_addr = rcpt.contractAddress
     print(f"   Vault deployed at: {vault_addr}")
