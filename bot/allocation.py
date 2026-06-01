@@ -188,21 +188,13 @@ def _scan_universe(client, dex: str, out: List[Market], now_ms: int) -> None:
 
 
 async def get_reliable_markets(client, dexes: Optional[List[str]] = None) -> List[Market]:
-    """Fetch HIP-3 markets AND main HL perps, score them, return viable ones."""
+    """Fetch HIP-3 markets, score them, return viable ones."""
     dexes = dexes or CONFIG.HIP3_DEXES
     out: List[Market] = []
     now_ms = int(time.time() * 1000)
 
     for dex in dexes:
         _scan_universe(client, dex, out, now_ms)
-
-    # Always scan the main HL perp universe too (BTC, ETH, SOL, etc.)
-    hip3_coins = {m.coin for m in out}
-    main_out: List[Market] = []
-    _scan_universe(client, "", main_out, now_ms)
-    for m in main_out:
-        if m.coin not in hip3_coins:
-            out.append(m)
 
     LOG.info("Total coins scanned: %d", len(out))
 
