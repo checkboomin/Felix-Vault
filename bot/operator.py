@@ -106,6 +106,7 @@ VAULT_ABI: List[dict] = [
     {"type": "function", "name": "accumulatedYield", "stateMutability": "view", "inputs": [], "outputs": [{"type": "uint256"}]},
     {"type": "function", "name": "activeMarketCount", "stateMutability": "view", "inputs": [], "outputs": [{"type": "uint256"}]},
     {"type": "function", "name": "marketId", "stateMutability": "pure", "inputs": [{"name": "coin", "type": "string"}, {"name": "dex", "type": "string"}], "outputs": [{"type": "bytes32"}]},
+    {"type": "function", "name": "allocations", "stateMutability": "view", "inputs": [{"name": "", "type": "bytes32"}], "outputs": [{"name": "coin", "type": "string"}, {"name": "dex", "type": "string"}, {"name": "allocatedUSDC", "type": "uint256"}, {"name": "perpSize", "type": "int256"}, {"name": "lastRebalance", "type": "uint256"}, {"name": "active", "type": "bool"}]},
     {"type": "function", "name": "addMarket", "stateMutability": "nonpayable", "inputs": [{"name": "coin", "type": "string"}, {"name": "dex", "type": "string"}], "outputs": [{"type": "bytes32"}]},
     {"type": "function", "name": "removeMarket", "stateMutability": "nonpayable", "inputs": [{"name": "marketId", "type": "bytes32"}], "outputs": []},
     {"type": "function", "name": "reportFundingYield", "stateMutability": "nonpayable", "inputs": [{"name": "marketId", "type": "bytes32"}, {"name": "yieldAmount", "type": "uint256"}], "outputs": []},
@@ -151,6 +152,8 @@ class OperatorBot:
         self.w3 = None
         self.vault = None
         self.acct = None
+        self._nonce: Optional[int] = None       # locally-tracked nonce for rapid sends
+        self._gas_price_cache: Optional[int] = None
         self._connect_chain()
 
     # --- chain wiring ----------------------------------------------------------------
@@ -183,28 +186,63 @@ class OperatorBot:
         import hashlib  # extremely unlikely fallback
         return hashlib.sha3_256(f"{dex}:{coin}".encode()).digest()
 
-    def _send(self, fn) -> Optional[str]:
-        """Build, sign and send a contract transaction; return tx hash or None."""
+    def _resync_nonce(self) -> None:
+        try:
+            self._nonce = self.w3.eth.get_transaction_count(self.acct.address, "pending")
+        except Exception:
+            self._nonce = None
+
+    def _gas_price(self) -> int:
+        if self._gas_price_cache is None:
+            try:
+                self._gas_price_cache = self.w3.eth.gas_price
+            except Exception:
+                self._gas_price_cache = 1_000_000_000
+        return self._gas_price_cache
+
+    def _send(self, fn, gas: int = 600_000) -> Optional[str]:
+        """Sign and send a tx with locally-tracked nonce + retry (no receipt wait).
+
+        Not waiting for receipts keeps RPC load low; the local nonce lets many txs
+        queue without colliding. Rate-limit / underpriced errors trigger a resync.
+        """
         if self.vault is None or self.acct is None:
             LOG.info("[off-chain] would send tx: %s", getattr(fn, "fn_name", fn))
             return None
-        try:
-            tx = fn.build_transaction(
-                {
+
+        for attempt in range(4):
+            try:
+                if self._nonce is None:
+                    self._resync_nonce()
+                nonce = self._nonce
+                gas_price = int(self._gas_price() * (1.0 + 0.2 * attempt))
+                tx = fn.build_transaction({
                     "from": self.acct.address,
-                    "nonce": self.w3.eth.get_transaction_count(self.acct.address),
-                    "gas": 600_000,
-                    "gasPrice": self.w3.eth.gas_price,
+                    "nonce": nonce,
+                    "gas": gas,
+                    "gasPrice": gas_price,
                     "chainId": CONFIG.CHAIN_ID,
-                }
-            )
-            signed = self.acct.sign_transaction(tx)
-            txh = self.w3.eth.send_raw_transaction(signed.raw_transaction)
-            self.w3.eth.wait_for_transaction_receipt(txh, timeout=120)
-            return txh.hex()
-        except Exception as exc:  # noqa: BLE001
-            LOG.error("tx failed: %s", exc)
-            return None
+                })
+                signed = self.acct.sign_transaction(tx)
+                txh = self.w3.eth.send_raw_transaction(signed.raw_transaction)
+                self._nonce = (nonce or 0) + 1  # advance local nonce on success
+                return txh.hex()
+            except Exception as exc:  # noqa: BLE001
+                msg = str(exc).lower()
+                if any(k in msg for k in ("rate limit", "-32005", "too many", "timeout")):
+                    time.sleep(2.0 * (attempt + 1))
+                    self._gas_price_cache = None
+                    self._resync_nonce()
+                    continue
+                if any(k in msg for k in ("underpriced", "nonce", "already known", "known transaction")):
+                    self._resync_nonce()
+                    time.sleep(1.0)
+                    continue
+                LOG.error("tx failed: %s", exc)
+                self._resync_nonce()
+                return None
+        LOG.error("tx gave up after retries")
+        return None
 
     # --- position execution ----------------------------------------------------------
 
@@ -403,6 +441,7 @@ class OperatorBot:
         elapsed_hours = max(0.0, (now_ms - since_ms) / 3_600_000.0) * CONFIG.FUNDING_TIME_MULTIPLIER
 
         total_funding = 0.0
+        report_market: Optional[Market] = None
         for market_id, market in list(self.markets.items()):
             if CONFIG.SIM_FUNDING:
                 spot = self.spots.get(market_id)
@@ -424,12 +463,16 @@ class OperatorBot:
                 continue
             self.funding_accum[market_id] = self.funding_accum.get(market_id, 0.0) + amount
             total_funding += amount
-            self._report_funding(market, amount)
+            if report_market is None:
+                report_market = market  # any active tracked market can carry the aggregate
             LOG.info("%s: +$%.4f funding (live rate %.4f%%/h = %.1f%% APY)",
                      market.coin, amount, market.funding_hourly * 100, market.funding_apy)
 
-        # Trigger hourly fee accrual on the vault.
-        self._accrue_fees()
+        # Report the aggregate yield to the vault in ONE tx (keeps RPC/gas load low),
+        # then accrue fees. accumulatedYield grows the share price for all holders.
+        if total_funding > 0 and report_market is not None:
+            self._report_funding(report_market, total_funding)
+            self._accrue_fees()
 
         # Protocol summary.
         fees = total_funding * 0.08  # 8% performance fee
@@ -455,7 +498,9 @@ class OperatorBot:
         self._send(self.vault.functions.reportFundingYield(mid, int(amount * USDC_SCALE)))
 
     def _report_perp_size(self, market: Market, size_units: float) -> None:
-        if self.vault is None:
+        # On-chain perp-size reporting is cosmetic; skip it in sim mode to cut tx load.
+        # The dashboard reads perp sizes from bot/state.json instead.
+        if self.vault is None or CONFIG.SIM_FUNDING:
             return
         mid = self.market_id_bytes(market.coin, market.dex)
         self._send(self.vault.functions.reportPerpSize(mid, int(size_units * 1e8)))
@@ -479,6 +524,39 @@ class OperatorBot:
         self._send(self.vault.functions.addMarket(market.coin, market.dex))
 
     # --- market list -----------------------------------------------------------------
+
+    async def reconstruct_positions(self) -> None:
+        """Rebuild in-memory positions from on-chain allocations (handles bot restart).
+
+        Spot positions live only in memory; if the bot restarts after a deposit, the
+        DeployCapital events won't replay. Read each tracked market's allocatedUSDC and
+        reopen the simulated delta-neutral position so funding keeps accruing.
+        """
+        if self.vault is None:
+            return
+        reopened = 0
+        for mid, market in list(self.markets.items()):
+            if self.spots.get(mid) is not None:
+                continue
+            try:
+                mid_b = self.market_id_bytes(market.coin, market.dex)
+                alloc = self.vault.functions.allocations(mid_b).call()
+                allocated_usdc = alloc[2] / USDC_SCALE  # index 2 = allocatedUSDC
+            except Exception:
+                continue
+            if allocated_usdc <= 0:
+                continue
+            try:
+                price = self.hl.fetch_mark_price(market.coin, market.dex)
+            except Exception:
+                continue
+            position_size = (allocated_usdc / 2.0) / price  # mirror open_delta_neutral
+            self.spots.open_with_id(mid, market.coin, position_size, price, allocated_usdc / 2.0)
+            self.perp_sizes[mid] = position_size
+            self.funding_accum.setdefault(mid, 0.0)
+            reopened += 1
+        if reopened:
+            LOG.info("Reconstructed %d positions from on-chain allocations (restart-safe)", reopened)
 
     async def refresh_market_list(self) -> List[Market]:
         markets = await get_reliable_markets(self.hl)
@@ -596,6 +674,10 @@ class OperatorBot:
                      m.coin, m.dex, m.funding_apy, m.mean_apy, m.cv, m.capacity / 1e6, m.capacity_rating)
 
         LOG.info("Total reliable markets: %d", len(markets))
+
+        # Restart-safe: rebuild positions from any capital already deployed on-chain.
+        await self.reconstruct_positions()
+
         LOG.info("Current share price: $%.6f", self._share_price())
 
         tasks = [
