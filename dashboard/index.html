@@ -236,8 +236,9 @@ async function fetchLiveApyMap(){
   const map={};
   for(const dex of CONFIG.HIP3_DEXES){
     try{
-      const [uni,ctx]=await hlPost({type:"metaAndAssetCtxs",dex});
-      uni.forEach((u,i)=>{ const f=parseFloat(ctx[i].funding||0); map[`${dex}:${u.name}`]=f*24*365*100; });
+      const [meta,ctx]=await hlPost({type:"metaAndAssetCtxs",dex});
+      const uni = (meta && meta.universe) ? meta.universe : meta;
+      uni.forEach((u,i)=>{ const name=(typeof u==="string")?u:u.name; const f=parseFloat((ctx[i]||{}).funding||0); map[`${dex}:${name}`]=f*24*365*100; });
     }catch(e){/* dex may be empty on testnet */}
   }
   return map;

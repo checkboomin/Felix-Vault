@@ -138,10 +138,18 @@ def compute_capacity(oi_usd: float, long_pct: float) -> float:
 def _scan_universe(client, dex: str, out: List[Market], now_ms: int) -> None:
     """Scan one dex (empty string = main HL markets) and append results to out."""
     try:
-        universe, ctxs = client.meta_and_asset_ctxs(dex)
+        meta, ctxs = client.meta_and_asset_ctxs(dex)
     except Exception as exc:
         LOG.debug("meta_and_asset_ctxs failed for dex=%r: %s", dex or "main", exc)
         return
+
+    # metaAndAssetCtxs returns [meta, ctxs] where meta is a dict with a
+    # "universe" list (each entry a dict with "name"). Older/main responses
+    # may already be the list itself.
+    if isinstance(meta, dict):
+        universe = meta.get("universe", [])
+    else:
+        universe = meta
 
     found = 0
     for u, ctx in zip(universe, ctxs):

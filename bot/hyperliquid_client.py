@@ -89,7 +89,8 @@ class HyperliquidClient:
     def fetch_mark_price(self, coin: str, dex: str = "") -> float:
         """Current mark price for `coin` on its dex."""
         dex = dex or self._coin_to_dex.get(coin, "")
-        universe, ctxs = self.meta_and_asset_ctxs(dex)
+        meta, ctxs = self.meta_and_asset_ctxs(dex)
+        universe = meta.get("universe", []) if isinstance(meta, dict) else meta
         names = [u if isinstance(u, str) else u["name"] for u in universe]
         if coin not in names:
             raise KeyError(f"coin {coin!r} not found on dex {dex!r}")
