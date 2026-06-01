@@ -591,9 +591,9 @@ class OperatorBot:
         LOG.info("=" * 60)
 
         markets = await self.refresh_market_list()
-        for m in markets[:10]:
-            LOG.info("  %s (%s): %.1f%% APY, $%.2fM capacity",
-                     m.coin, m.dex, m.funding_apy, m.capacity / 1e6)
+        for m in markets[:15]:
+            LOG.info("  %-6s (%-5s): live %6.1f%% | 30d-mean %6.1f%% | CV %.2f | $%.2fM cap | %s",
+                     m.coin, m.dex, m.funding_apy, m.mean_apy, m.cv, m.capacity / 1e6, m.capacity_rating)
 
         LOG.info("Total reliable markets: %d", len(markets))
         LOG.info("Current share price: $%.6f", self._share_price())

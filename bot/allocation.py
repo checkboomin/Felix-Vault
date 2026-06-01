@@ -219,13 +219,18 @@ async def get_reliable_markets(client, dexes: Optional[List[str]] = None) -> Lis
 
     LOG.info("Total coins scanned: %d", len(out))
 
-    # Filter: rating in allowed set AND APY >= threshold (>= so 0.0 passes when threshold=0).
+    # Filter: rating in allowed set AND sustained 30d mean APY >= threshold
+    # (mean, not live, matches the capacity dashboard and avoids momentary spikes).
     reliable = [
         m
         for m in out
-        if m.funding_apy >= CONFIG.MIN_VIABLE_APY and m.capacity_rating in CONFIG.CAPACITY_RATING_FILTER
+        if m.mean_apy >= CONFIG.MIN_VIABLE_APY and m.capacity_rating in CONFIG.CAPACITY_RATING_FILTER
     ]
-    reliable.sort(key=lambda m: m.funding_apy, reverse=True)
+    # Rank by sustained 30d mean APY by default; "live_apy" chases the instantaneous rate.
+    if CONFIG.RANK_BY == "live_apy":
+        reliable.sort(key=lambda m: m.funding_apy, reverse=True)
+    else:
+        reliable.sort(key=lambda m: m.mean_apy, reverse=True)
     return reliable
 
 

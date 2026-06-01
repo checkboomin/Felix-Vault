@@ -52,6 +52,9 @@ class Config:
     MIN_ALLOCATION_USDC: float = float(_get("MIN_ALLOCATION_USDC", "1000"))
     # Cap how many top-APY markets are registered/used on-chain (keeps tx count sane).
     MAX_ACTIVE_MARKETS: int = int(_get("MAX_ACTIVE_MARKETS", "6"))
+    # Rank markets by sustained "mean_apy" (30d, matches the capacity dashboard) or
+    # momentary "live_apy". Sustained avoids chasing volatile funding spikes.
+    RANK_BY: str = _get("RANK_BY", "mean_apy")
 
     # --- Reliability gate (matches dashboard "Reliable" definition) ------------------
     MAX_CV: float = float(_get("MAX_CV", "0.75"))
