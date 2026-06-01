@@ -412,6 +412,9 @@ class OperatorBot:
                 perp_notional = spot.usdc_allocated
                 try:
                     rate = self.hl.fetch_funding_hourly(market.coin, market.dex)
+                    # Keep the market's displayed funding/APY in sync with the live rate.
+                    market.funding_hourly = rate
+                    market.funding_apy = rate * 24 * 365 * 100
                 except Exception:
                     rate = market.funding_hourly
                 amount = perp_notional * rate * elapsed_hours
@@ -422,7 +425,7 @@ class OperatorBot:
             self.funding_accum[market_id] = self.funding_accum.get(market_id, 0.0) + amount
             total_funding += amount
             self._report_funding(market, amount)
-            LOG.info("%s: +$%.4f funding (rate %.4f%%/h, %.1f%% APY)",
+            LOG.info("%s: +$%.4f funding (live rate %.4f%%/h = %.1f%% APY)",
                      market.coin, amount, market.funding_hourly * 100, market.funding_apy)
 
         # Trigger hourly fee accrual on the vault.
