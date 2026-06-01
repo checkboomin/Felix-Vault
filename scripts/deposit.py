@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -32,17 +33,52 @@ ERC20_ABI = [
 ]
 
 
+def _retry(fn, tries: int = 8, delay: float = 2.0):
+    """Call fn(), retrying on transient RPC errors (rate limited, etc.)."""
+    last = None
+    for i in range(tries):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            msg = str(exc).lower()
+            if "rate limit" in msg or "-32005" in msg or "timeout" in msg or "too many" in msg:
+                time.sleep(delay * (i + 1))
+                continue
+            raise
+    raise last
+
+
+def _wait_receipt(w3, txh):
+    """Poll for a receipt manually, tolerating rate-limit errors."""
+    for i in range(40):
+        rcpt = _retry(lambda: w3.eth.get_transaction_receipt(txh) if _exists(w3, txh) else None)
+        if rcpt is not None:
+            return rcpt
+        time.sleep(3)
+    raise SystemExit("Timed out waiting for receipt (tx may still confirm — check the dashboard)")
+
+
+def _exists(w3, txh):
+    try:
+        return w3.eth.get_transaction_receipt(txh) is not None
+    except Exception:
+        return False
+
+
 def _send(w3, acct, func, gas: int):
+    nonce = _retry(lambda: w3.eth.get_transaction_count(acct.address))
+    gas_price = _retry(lambda: w3.eth.gas_price)
     tx = func.build_transaction({
         "from": acct.address,
-        "nonce": w3.eth.get_transaction_count(acct.address),
+        "nonce": nonce,
         "gas": gas,
-        "gasPrice": w3.eth.gas_price,
+        "gasPrice": gas_price,
         "chainId": CONFIG.CHAIN_ID,
     })
     signed = acct.sign_transaction(tx)
-    txh = w3.eth.send_raw_transaction(signed.raw_transaction)
-    return w3.eth.wait_for_transaction_receipt(txh, timeout=180)
+    txh = _retry(lambda: w3.eth.send_raw_transaction(signed.raw_transaction))
+    return _wait_receipt(w3, txh)
 
 
 def main():
@@ -70,15 +106,24 @@ def main():
     vault = w3.eth.contract(address=vault_addr, abi=vault_abi)
 
     base = int(amount * (10**USDC_DECIMALS))
-    bal = usdc.functions.balanceOf(acct.address).call()
+    bal = _retry(lambda: usdc.functions.balanceOf(acct.address).call())
+    shares_now = _retry(lambda: vault.functions.shares(acct.address).call())
+    tvl_now = _retry(lambda: vault.functions.totalAssets().call())
     print(f"Wallet:        {acct.address}")
     print(f"USDC balance:  {bal / 10**USDC_DECIMALS:,.2f}")
     print(f"Vault:         {vault_addr}")
-    print(f"Depositing:    {amount:,.2f} USDC")
+    print(f"Current TVL:   {tvl_now / 10**USDC_DECIMALS:,.2f} USDC | your shares: {shares_now / 10**USDC_DECIMALS:,.2f}")
+
+    # Idempotency: if a prior run already deposited (shares minted, balance spent), stop.
+    if shares_now > 0 and bal < base:
+        print("\nLooks like your deposit already went through (shares minted, USDC spent).")
+        print("Nothing more to do — watch the bot window / dashboard for yield.")
+        return
     if bal < base:
         raise SystemExit(f"Insufficient USDC: have {bal/1e6:,.2f}, need {amount:,.2f}")
 
-    allowance = usdc.functions.allowance(acct.address, vault_addr).call()
+    print(f"Depositing:    {amount:,.2f} USDC")
+    allowance = _retry(lambda: usdc.functions.allowance(acct.address, vault_addr).call())
     if allowance < base:
         print("Approving vault to spend USDC ...")
         _send(w3, acct, usdc.functions.approve(vault_addr, base), 120_000)
@@ -89,8 +134,8 @@ def main():
     print(f"   deposit tx: {rcpt.transactionHash.hex()}  (status {rcpt.status})")
 
     try:
-        shares = vault.functions.shares(acct.address).call()
-        ta = vault.functions.totalAssets().call()
+        shares = _retry(lambda: vault.functions.shares(acct.address).call())
+        ta = _retry(lambda: vault.functions.totalAssets().call())
         print(f"   your shares:  {shares / 10**USDC_DECIMALS:,.2f}")
         print(f"   vault TVL:    {ta / 10**USDC_DECIMALS:,.2f} USDC")
     except Exception:
