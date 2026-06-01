@@ -521,6 +521,14 @@ class OperatorBot:
     def _add_market_onchain(self, market: Market) -> None:
         if self.vault is None:
             return
+        # Skip if already registered on-chain (avoids wasted reverted txs on restart).
+        try:
+            mid = self.market_id_bytes(market.coin, market.dex)
+            alloc = self.vault.functions.allocations(mid).call()
+            if alloc[5]:  # active flag
+                return
+        except Exception:
+            pass
         self._send(self.vault.functions.addMarket(market.coin, market.dex))
 
     # --- market list -----------------------------------------------------------------
