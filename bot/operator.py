@@ -391,20 +391,39 @@ class OperatorBot:
                 self._report_perp_size(market, -self.perp_sizes[market_id])
 
     async def collect_and_report_funding(self) -> None:
-        """Every hour: pull funding per market, report to vault, accrue fees, log summary."""
+        """Periodically: compute funding per market, report to vault, accrue fees, log.
+
+        SIM_FUNDING mode (demo): funding = perp_notional * live_funding_rate * elapsed,
+        using the REAL funding rate from the data API (mainnet by default). Otherwise
+        read actual funding payments received on the execution account.
+        """
+        now_ms = int(time.time() * 1000)
         since_ms = self.last_funding_check_ms
-        self.last_funding_check_ms = int(time.time() * 1000)
+        self.last_funding_check_ms = now_ms
+        elapsed_hours = max(0.0, (now_ms - since_ms) / 3_600_000.0) * CONFIG.FUNDING_TIME_MULTIPLIER
 
         total_funding = 0.0
         for market_id, market in list(self.markets.items()):
-            amount = self.hl.get_funding_received(market.coin, since_ms)
+            if CONFIG.SIM_FUNDING:
+                spot = self.spots.get(market_id)
+                if spot is None:
+                    continue
+                # The short perp earns funding on its notional (~= the spot leg notional).
+                perp_notional = spot.usdc_allocated
+                try:
+                    rate = self.hl.fetch_funding_hourly(market.coin, market.dex)
+                except Exception:
+                    rate = market.funding_hourly
+                amount = perp_notional * rate * elapsed_hours
+            else:
+                amount = self.hl.get_funding_received(market.coin, since_ms)
             if amount <= 0:
                 continue
             self.funding_accum[market_id] = self.funding_accum.get(market_id, 0.0) + amount
             total_funding += amount
             self._report_funding(market, amount)
-            LOG.info("%s: received $%.2f funding this hour (%.1f%% APY annualised)",
-                     market.coin, amount, market.funding_apy)
+            LOG.info("%s: +$%.4f funding (rate %.4f%%/h, %.1f%% APY)",
+                     market.coin, amount, market.funding_hourly * 100, market.funding_apy)
 
         # Trigger hourly fee accrual on the vault.
         self._accrue_fees()
@@ -460,12 +479,13 @@ class OperatorBot:
 
     async def refresh_market_list(self) -> List[Market]:
         markets = await get_reliable_markets(self.hl)
-        LOG.info("Refreshed reliable markets: %d", len(markets))
-        for m in markets:
+        top = markets[: CONFIG.MAX_ACTIVE_MARKETS]
+        LOG.info("Reliable markets: %d (registering top %d on-chain)", len(markets), len(top))
+        for m in top:
             if m.id not in self.markets:
                 self._add_market_onchain(m)
                 self.markets[m.id] = m
-        return markets
+        return top
 
     # --- event listener --------------------------------------------------------------
 

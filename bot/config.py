@@ -27,6 +27,9 @@ def _get(name: str, default: str = "") -> str:
 class Config:
     # --- Endpoints -------------------------------------------------------------------
     HL_TESTNET_API: str = _get("HL_TESTNET_API", "https://api.hyperliquid-testnet.xyz")
+    # Read-only market data (funding rates, OI, mark prices). Defaults to MAINNET so the
+    # demo uses real, non-zero HIP-3 funding while execution stays on testnet.
+    HL_DATA_API: str = _get("HL_DATA_API", "https://api.hyperliquid.xyz")
     HYPEREVM_RPC: str = _get("HYPEREVM_RPC", "https://rpc.hyperliquid-testnet.xyz/evm")
     CHAIN_ID: int = int(_get("CHAIN_ID", "998"))
 
@@ -47,6 +50,8 @@ class Config:
     MAX_TVL_PCT_PER_MARKET: float = float(_get("MAX_TVL_PCT_PER_MARKET", "0.30"))
     REBALANCE_THRESHOLD: float = float(_get("REBALANCE_THRESHOLD", "0.05"))
     MIN_ALLOCATION_USDC: float = float(_get("MIN_ALLOCATION_USDC", "1000"))
+    # Cap how many top-APY markets are registered/used on-chain (keeps tx count sane).
+    MAX_ACTIVE_MARKETS: int = int(_get("MAX_ACTIVE_MARKETS", "6"))
 
     # --- Reliability gate (matches dashboard "Reliable" definition) ------------------
     MAX_CV: float = float(_get("MAX_CV", "0.75"))
@@ -67,6 +72,15 @@ class Config:
     DRY_RUN: bool = _get("DRY_RUN", "false").lower() in ("1", "true", "yes")
     LOG_FILE: str = _get("LOG_FILE", "bot/operator.log")
     HEDGE_DRIFT_WARN_PCT: float = float(_get("HEDGE_DRIFT_WARN_PCT", "0.02"))
+
+    # --- Simulated funding accrual (demo) --------------------------------------------
+    # When true, funding is computed as perp_notional * live_funding_rate * elapsed
+    # instead of read from real on-chain funding payments. Defaults to DRY_RUN.
+    SIM_FUNDING: bool = _get("SIM_FUNDING", _get("DRY_RUN", "false")).lower() in ("1", "true", "yes")
+    # Accelerate simulated time so yield is visible quickly (1.0 = real time).
+    FUNDING_TIME_MULTIPLIER: float = float(_get("FUNDING_TIME_MULTIPLIER", "1.0"))
+    # Auto-discover available HIP-3 perp dexes from the data API (handles mainnet names).
+    AUTO_DISCOVER_DEXES: bool = _get("AUTO_DISCOVER_DEXES", "true").lower() in ("1", "true", "yes")
 
 
 CONFIG = Config()

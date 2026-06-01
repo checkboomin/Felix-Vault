@@ -197,7 +197,20 @@ def _scan_universe(client, dex: str, out: List[Market], now_ms: int) -> None:
 
 async def get_reliable_markets(client, dexes: Optional[List[str]] = None) -> List[Market]:
     """Fetch HIP-3 markets, score them, return viable ones."""
-    dexes = dexes or CONFIG.HIP3_DEXES
+    if dexes is None:
+        dexes = CONFIG.HIP3_DEXES
+        if CONFIG.AUTO_DISCOVER_DEXES:
+            discovered = client.perp_dexs()
+            if discovered:
+                # Union of configured + discovered, preserving order and uniqueness.
+                seen = set()
+                merged = []
+                for d in list(dexes) + discovered:
+                    if d not in seen:
+                        seen.add(d)
+                        merged.append(d)
+                dexes = merged
+                LOG.info("Discovered HIP-3 dexes: %s", ", ".join(discovered))
     out: List[Market] = []
     now_ms = int(time.time() * 1000)
 

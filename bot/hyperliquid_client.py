@@ -39,6 +39,8 @@ except Exception:  # pragma: no cover - SDK optional
 class HyperliquidClient:
     def __init__(self, private_key: Optional[str] = None, dry_run: Optional[bool] = None):
         self.base_url = CONFIG.HL_TESTNET_API
+        # Read-only market data source (may be mainnet for real funding rates).
+        self.data_url = CONFIG.HL_DATA_API or CONFIG.HL_TESTNET_API
         self.dry_run = CONFIG.DRY_RUN if dry_run is None else dry_run
         self._private_key = private_key or CONFIG.OPERATOR_PRIVATE_KEY
         self._info = None
@@ -65,9 +67,9 @@ class HyperliquidClient:
     #                                   READ-ONLY INFO
     # ----------------------------------------------------------------------------------
 
-    def _post_info(self, body: dict) -> object:
-        """POST to the /info endpoint with a small retry."""
-        url = f"{self.base_url}/info"
+    def _post_info(self, body: dict, base: Optional[str] = None) -> object:
+        """POST to the /info endpoint with a small retry. `base` overrides the host."""
+        url = f"{base or self.base_url}/info"
         last_exc = None
         for attempt in range(3):
             try:
@@ -79,12 +81,27 @@ class HyperliquidClient:
                 time.sleep(0.5 * (attempt + 1))
         raise RuntimeError(f"HL info request failed: {body.get('type')}: {last_exc}")
 
+    def perp_dexs(self) -> List[str]:
+        """Discover HIP-3 perp dex names from the data API (skips the main dex)."""
+        try:
+            raw = self._post_info({"type": "perpDexs"}, base=self.data_url)
+        except Exception:
+            return []
+        names: List[str] = []
+        for entry in raw or []:
+            if isinstance(entry, dict) and entry.get("name"):
+                names.append(entry["name"])
+        return names
+
     def meta_and_asset_ctxs(self, dex: str = "") -> List:
-        """Return [universe, contexts] for a HIP-3 dex (or main if dex empty)."""
+        """Return [meta, contexts] for a HIP-3 dex (or main if dex empty).
+
+        Uses the data API (mainnet by default) so funding rates are real.
+        """
         body: Dict[str, object] = {"type": "metaAndAssetCtxs"}
         if dex:
             body["dex"] = dex
-        return self._post_info(body)
+        return self._post_info(body, base=self.data_url)
 
     def fetch_mark_price(self, coin: str, dex: str = "") -> float:
         """Current mark price for `coin` on its dex."""
@@ -98,10 +115,24 @@ class HyperliquidClient:
         markpx = ctxs[idx].get("markPx") or ctxs[idx].get("oraclePx")
         return float(markpx)
 
+    def fetch_funding_hourly(self, coin: str, dex: str = "") -> float:
+        """Current hourly funding rate (decimal fraction) for `coin` on its dex."""
+        dex = dex or self._coin_to_dex.get(coin, "")
+        meta, ctxs = self.meta_and_asset_ctxs(dex)
+        universe = meta.get("universe", []) if isinstance(meta, dict) else meta
+        names = [u if isinstance(u, str) else u.get("name") for u in universe]
+        if coin not in names:
+            return 0.0
+        ctx = ctxs[names.index(coin)]
+        try:
+            return float(ctx.get("funding", 0.0)) if isinstance(ctx, dict) else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
     def funding_history(self, coin: str, start_ms: int) -> List[dict]:
         body = {"type": "fundingHistory", "coin": coin, "startTime": start_ms}
         try:
-            return self._post_info(body) or []
+            return self._post_info(body, base=self.data_url) or []
         except Exception:
             return []
 
